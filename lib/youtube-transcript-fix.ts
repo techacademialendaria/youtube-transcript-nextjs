@@ -4,24 +4,13 @@ import { parse } from 'node-html-parser';
 
 const RE_YOUTUBE =
   /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
-
+  const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
 class YoutubeTranscriptError extends Error {
   constructor(message: string) {
     super(`[YoutubeTranscript] ${message}`);
   }
 }
 
-interface TranscriptChunk {
-  text: string;
-  offset: number;
-  duration: number;
-}
-
-interface CaptionTrack {
-  languageCode: string;
-  baseUrl: string;
-}
 
 /**
  * Class to retrieve transcript if exist
@@ -35,7 +24,8 @@ class YoutubeTranscript {
    */
   static async fetchTranscript(videoId: string) {
     const identifier = this.retrieveVideoId(videoId);
-    const lang = 'pt';
+    // const lang = config?.lang ?? 'en';
+    const lang = 'pt'; // Forçando parâmetro lang para pt
     console.log({ identifier });
     try {
       const transcriptUrl = await fetch(
@@ -50,18 +40,19 @@ class YoutubeTranscript {
       )
         .then((res) => res.text())
         .then((html) => {
-          const parsedHTML = parse(html);
+          const parsedHTML = parse(html)
           console.log(`[YoutubeTranscript] Parsed Document Structure: ${parsedHTML.structure}`);
-          return parsedHTML;
+          return parsedHTML
         })
         .then((html) => parseTranscriptEndpoint(html, lang))
-        .catch((error: Error) => console.error(error));
+        .catch((error) => console.error(error))
 
       console.log(`[YoutubeTranscript] transcriptUrl: ${transcriptUrl}`);
 
       if (!transcriptUrl)
         throw new Error('Failed to locate a transcript for this video!');
 
+      // Result is hopefully some XML.
       const transcriptXML = await fetch(transcriptUrl)
         .then((res) => res.text())
         .then((xml) => parse(xml));
@@ -73,7 +64,7 @@ class YoutubeTranscript {
         return Math.round(float);
       };
 
-      const transcriptions: TranscriptChunk[] = [];
+      let transcriptions = [];
       for (const chunk of chunks) {
         const [offset, duration] = chunk.rawAttrs.split(' ');
         transcriptions.push({
@@ -83,11 +74,8 @@ class YoutubeTranscript {
         });
       }
       return transcriptions;
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        throw new YoutubeTranscriptError(error.message);
-      }
-      throw new YoutubeTranscriptError('Unknown error occurred');
+    } catch (e: any) {
+      throw new YoutubeTranscriptError(e);
     }
   }
 
@@ -109,12 +97,15 @@ class YoutubeTranscript {
   }
 }
 
-const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: string) => {
+const parseTranscriptEndpoint = (document: any, langCode?: string) => {
   try {
+    // Get all script tags on document page
     const scripts = document.getElementsByTagName('script');
+
     console.log(`[YoutubeTranscript] Number of Scripts Found: ${scripts.length}`);
 
-    const playerScript = scripts.find((script) =>
+    // find the player data script.
+    const playerScript = scripts.find((script: any) =>
       script.textContent.includes('var ytInitialPlayerResponse = {')
     );
 
@@ -125,9 +116,10 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
     }
 
     const dataString =
-      playerScript?.textContent
-        ?.split('var ytInitialPlayerResponse = ')?.[1]
-        ?.split('};')?.[0] + '}';
+      playerScript.textContent
+        ?.split('var ytInitialPlayerResponse = ')?.[1] //get the start of the object {....
+        ?.split('};')?.[0] + // chunk off any code after object closure.
+      '}'; // add back that curly brace we just cut.
 
     if (!dataString) {
       console.error(`[YoutubeTranscript] dataString is undefined or empty`);
@@ -135,12 +127,13 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
       console.log(`[YoutubeTranscript] dataString length: ${dataString.length}`);
     }
 
-    const data = JSON.parse(dataString.trim());
+    const data = JSON.parse(dataString.trim()); // Attempt a JSON parse
 
     if (!data) {
       console.error(`[YoutubeTranscript] data is undefined or empty`);
     } else {
-      console.log(`[YoutubeTranscript] data:`, data);
+      console.log(`[YoutubeTranscript] data:`);
+      console.log(data);
     }
 
     const availableCaptions =
@@ -152,12 +145,13 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
       console.log(`[YoutubeTranscript] Available captions count: ${availableCaptions.length}`);
     }
 
-    let captionTrack = availableCaptions[0] as CaptionTrack;
+    // If languageCode was specified then search for it's code, otherwise get the first.
+    let captionTrack = availableCaptions?.[0];
     if (langCode)
       captionTrack =
-        availableCaptions.find((track: CaptionTrack) =>
+        availableCaptions.find((track: any) =>
           track.languageCode.includes(langCode)
-        ) ?? availableCaptions[0];
+        ) ?? availableCaptions?.[0];
 
     if (!captionTrack) {
       console.error(`[YoutubeTranscript] No caption track found for lang: ${langCode}`);
@@ -166,13 +160,16 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
     }
 
     return captionTrack?.baseUrl;
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      console.error(error);
-      console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${error.message}`);
-    }
+  } catch (e: any) {
+    console.error(e)
+    console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${e.message}`);
     return null;
   }
 };
 
+YoutubeTranscript.fetchTranscript("https://www.youtube.com/watch?v=3TiDAWmkhts")
+  .then(req => console.log(req))
+  .catch(e => console.error(e))
+
 export { YoutubeTranscript, YoutubeTranscriptError };
+// module.exports = { YoutubeTranscript, YoutubeTranscriptError };
