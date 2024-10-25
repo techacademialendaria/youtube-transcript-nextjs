@@ -139,17 +139,25 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
   }
 };
 
-const fetchWithRetry = async (url: string, options: RequestInit, retries = 3) => {
+const fetchWithRetry = async (url: string, options: RequestInit, retries = 3): Promise<string> => {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(url, options);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      return await response.text();
+      const text = await response.text();
+      if (!text) throw new Error('Empty response');
+      return text;
     } catch (error) {
       if (i === retries - 1) throw error;
       await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
     }
   }
+  throw new Error('Failed to fetch after retries');
+};
+
+const convertToMs = (timestamp: string): number => {
+  const match = timestamp.match(/(\d+(?:\.\d+)?)/);
+  return match ? parseFloat(match[1]) * 1000 : 0;
 };
 
 YoutubeTranscript.fetchTranscript("https://www.youtube.com/watch?v=3TiDAWmkhts")
