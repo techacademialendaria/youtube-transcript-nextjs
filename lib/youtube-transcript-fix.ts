@@ -11,6 +11,9 @@ class YoutubeTranscriptError extends Error {
   }
 }
 
+type YtFetchConfig = {
+  lang?: string; // Object with lang param (eg: en, es, hk, uk) format.
+};
 
 /**
  * Class to retrieve transcript if exist
@@ -22,13 +25,14 @@ class YoutubeTranscript {
    * @param config Object with lang param (eg: en, es, hk, uk) format.
    * Will just the grab first caption if it can find one, so no special lang caption support.
    */
-  static async fetchTranscript(videoId: string) {
+  static async fetchTranscript(videoId: string, config: YtFetchConfig = {}) {
     const identifier = this.retrieveVideoId(videoId);
-    const lang = 'pt';
-
+    // const lang = config?.lang ?? 'en';
+    const lang = 'pt'; // Forçando parâmetro lang para pt
+    console.log({ identifier });
     try {
-      const html = await fetchWithRetry(
-        `https://www.youtube.com/watch?v=${identifier}`,
+      const transcriptUrl = await fetch(
+        `https://www.youtube.com/watch?v=${identifier}&key=${process.env.NEXT_APP_GOOGLE_API_KEY}`,
         {
           headers: {
             'User-Agent': USER_AGENT,
@@ -36,23 +40,34 @@ class YoutubeTranscript {
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
           },
         }
-      );
+      )
+        .then((res) => res.text())
+        .then((html) => {
+          const parsedHTML = parse(html)
+          console.log(`[YoutubeTranscript] Parsed Document Structure: ${parsedHTML.structure}`);
+          return parsedHTML
+        })
+        .then((html) => parseTranscriptEndpoint(html, lang))
+        .catch((error) => console.error(error))
 
-      const parsedHTML = parse(html);
-      const transcriptUrl = await parseTranscriptEndpoint(parsedHTML, lang);
+      console.log(`[YoutubeTranscript] transcriptUrl: ${transcriptUrl}`);
 
-      if (!transcriptUrl) {
-        throw new Error('Não foi possível encontrar legendas para este vídeo');
-      }
+      if (!transcriptUrl)
+        throw new Error('Failed to locate a transcript for this video!');
 
-      const transcriptXML = await fetchWithRetry(transcriptUrl, {
-        headers: { 'User-Agent': USER_AGENT }
-      });
+      // Result is hopefully some XML.
+      const transcriptXML = await fetch(transcriptUrl)
+        .then((res) => res.text())
+        .then((xml) => parse(xml));
 
-      const parsedXML = parse(transcriptXML);
-      const chunks = parsedXML.getElementsByTagName('text');
+      const chunks = transcriptXML.getElementsByTagName('text');
 
-      const transcriptions = [];
+      const convertToMs = (text: string) => {
+        const float = parseFloat(text.split('=')[1].replace(/"/g, '')) * 1000;
+        return Math.round(float);
+      };
+
+      let transcriptions = [];
       for (const chunk of chunks) {
         const [offset, duration] = chunk.rawAttrs.split(' ');
         transcriptions.push({
@@ -62,11 +77,8 @@ class YoutubeTranscript {
         });
       }
       return transcriptions;
-    } catch (e: unknown) {
-      if (e instanceof Error) {
-        throw new YoutubeTranscriptError(e.message);
-      }
-      throw new YoutubeTranscriptError('Erro desconhecido');
+    } catch (e: any) {
+      throw new YoutubeTranscriptError(e);
     }
   }
 
@@ -88,32 +100,22 @@ class YoutubeTranscript {
   }
 }
 
-interface ScriptElement {
-  textContent: string;
-}
-
-interface CaptionTrack {
-  languageCode: string;
-  baseUrl: string;
-}
-
-interface YTPlayerResponse {
-  captions?: {
-    playerCaptionsTracklistRenderer?: {
-      captionTracks: CaptionTrack[];
-    };
-  };
-}
-
-const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: string) => {
+const parseTranscriptEndpoint = (document: any, langCode?: string) => {
   try {
+    // Get all script tags on document page
     const scripts = document.getElementsByTagName('script');
-    const playerScript = scripts.find((script: ScriptElement) =>
+
+    console.log(`[YoutubeTranscript] Number of Scripts Found: ${scripts.length}`);
+
+    // find the player data script.
+    const playerScript = scripts.find((script: any) =>
       script.textContent.includes('var ytInitialPlayerResponse = {')
     );
 
     if (!playerScript) {
-      throw new Error('Failed to find player script');
+      console.error(`[YoutubeTranscript] playerScript not found`);
+    } else {
+      console.log(`[YoutubeTranscript] playerScript found.`);
     }
 
     const dataString =
@@ -122,42 +124,50 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
         ?.split('};')?.[0] + // chunk off any code after object closure.
       '}'; // add back that curly brace we just cut.
 
-    const data = JSON.parse(dataString.trim()) as YTPlayerResponse;
-    
-    const availableCaptions = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    if (!dataString) {
+      console.error(`[YoutubeTranscript] dataString is undefined or empty`);
+    } else {
+      console.log(`[YoutubeTranscript] dataString length: ${dataString.length}`);
+    }
+
+    const data = JSON.parse(dataString.trim()); // Attempt a JSON parse
+
+    if (!data) {
+      console.error(`[YoutubeTranscript] data is undefined or empty`);
+    } else {
+      console.log(`[YoutubeTranscript] data:`);
+      console.log(data);
+    }
+
+    const availableCaptions =
+      data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+
+    if (availableCaptions.length === 0) {
+      console.error(`[YoutubeTranscript] No available captions found`);
+    } else {
+      console.log(`[YoutubeTranscript] Available captions count: ${availableCaptions.length}`);
+    }
+
+    // If languageCode was specified then search for it's code, otherwise get the first.
     let captionTrack = availableCaptions?.[0];
     if (langCode)
-      captionTrack = availableCaptions.find((track: CaptionTrack) =>
-        track.languageCode.includes(langCode)
-      ) ?? availableCaptions?.[0];
+      captionTrack =
+        availableCaptions.find((track: any) =>
+          track.languageCode.includes(langCode)
+        ) ?? availableCaptions?.[0];
+
+    if (!captionTrack) {
+      console.error(`[YoutubeTranscript] No caption track found for lang: ${langCode}`);
+    } else {
+      console.log(`[YoutubeTranscript] Selected caption track: ${captionTrack.baseUrl}`);
+    }
 
     return captionTrack?.baseUrl;
-  } catch (error: unknown) {
-    console.error(error);
-    console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } catch (e: any) {
+    console.error(e)
+    console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${e.message}`);
     return null;
   }
-};
-
-const fetchWithRetry = async (url: string, options: RequestInit, retries = 3): Promise<string> => {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, options);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const text = await response.text();
-      if (!text) throw new Error('Empty response');
-      return text;
-    } catch (error) {
-      if (i === retries - 1) throw error;
-      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
-    }
-  }
-  throw new Error('Failed to fetch after retries');
-};
-
-const convertToMs = (timestamp: string): number => {
-  const match = timestamp.match(/(\d+(?:\.\d+)?)/);
-  return match ? parseFloat(match[1]) * 1000 : 0;
 };
 
 YoutubeTranscript.fetchTranscript("https://www.youtube.com/watch?v=3TiDAWmkhts")
