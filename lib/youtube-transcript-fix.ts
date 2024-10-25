@@ -24,12 +24,11 @@ class YoutubeTranscript {
    */
   static async fetchTranscript(videoId: string) {
     const identifier = this.retrieveVideoId(videoId);
-    // const lang = config?.lang ?? 'en';
-    const lang = 'pt'; // Forçando parâmetro lang para pt
-    console.log({ identifier });
+    const lang = 'pt';
+
     try {
-      const transcriptUrl = await fetch(
-        `https://www.youtube.com/watch?v=${identifier}&key=${process.env.NEXT_APP_GOOGLE_API_KEY}`,
+      const html = await fetchWithRetry(
+        `https://www.youtube.com/watch?v=${identifier}`,
         {
           headers: {
             'User-Agent': USER_AGENT,
@@ -37,32 +36,21 @@ class YoutubeTranscript {
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
           },
         }
-      )
-        .then((res) => res.text())
-        .then((html) => {
-          const parsedHTML = parse(html)
-          console.log(`[YoutubeTranscript] Parsed Document Structure: ${parsedHTML.structure}`);
-          return parsedHTML
-        })
-        .then((html) => parseTranscriptEndpoint(html, lang))
-        .catch((error) => console.error(error))
+      );
 
-      console.log(`[YoutubeTranscript] transcriptUrl: ${transcriptUrl}`);
+      const parsedHTML = parse(html);
+      const transcriptUrl = await parseTranscriptEndpoint(parsedHTML, lang);
 
-      if (!transcriptUrl)
-        throw new Error('Failed to locate a transcript for this video!');
+      if (!transcriptUrl) {
+        throw new Error('Não foi possível encontrar legendas para este vídeo');
+      }
 
-      // Result is hopefully some XML.
-      const transcriptXML = await fetch(transcriptUrl)
-        .then((res) => res.text())
-        .then((xml) => parse(xml));
+      const transcriptXML = await fetchWithRetry(transcriptUrl, {
+        headers: { 'User-Agent': USER_AGENT }
+      });
 
-      const chunks = transcriptXML.getElementsByTagName('text');
-
-      const convertToMs = (text: string) => {
-        const float = parseFloat(text.split('=')[1].replace(/"/g, '')) * 1000;
-        return Math.round(float);
-      };
+      const parsedXML = parse(transcriptXML);
+      const chunks = parsedXML.getElementsByTagName('text');
 
       const transcriptions = [];
       for (const chunk of chunks) {
@@ -148,6 +136,19 @@ const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: 
     console.error(error);
     console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${error instanceof Error ? error.message : 'Unknown error'}`);
     return null;
+  }
+};
+
+const fetchWithRetry = async (url: string, options: RequestInit, retries = 3) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      if (i === retries - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+    }
   }
 };
 
