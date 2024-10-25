@@ -37,7 +37,7 @@ class YoutubeTranscript {
    * @param config Object with lang param (eg: en, es, hk, uk) format.
    * Will just the grab first caption if it can find one, so no special lang caption support.
    */
-  static async fetchTranscript(videoId: string, _config: YtFetchConfig = {}) {
+  static async fetchTranscript(videoId: string) {
     const identifier = this.retrieveVideoId(videoId);
     const lang = 'pt';
     console.log({ identifier });
