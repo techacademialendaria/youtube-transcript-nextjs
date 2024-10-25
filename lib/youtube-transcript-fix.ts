@@ -12,10 +12,6 @@ class YoutubeTranscriptError extends Error {
   }
 }
 
-interface YtFetchConfig {
-  lang?: string;
-}
-
 interface TranscriptChunk {
   text: string;
   offset: number;
