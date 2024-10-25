@@ -74,8 +74,11 @@ class YoutubeTranscript {
         });
       }
       return transcriptions;
-    } catch (e: any) {
-      throw new YoutubeTranscriptError(e);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        throw new YoutubeTranscriptError(e.message);
+      }
+      throw new YoutubeTranscriptError('Erro desconhecido');
     }
   }
 
