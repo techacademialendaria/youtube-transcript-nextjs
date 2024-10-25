@@ -64,7 +64,7 @@ class YoutubeTranscript {
         return Math.round(float);
       };
 
-      let transcriptions = [];
+      const transcriptions = [];
       for (const chunk of chunks) {
         const [offset, duration] = chunk.rawAttrs.split(' ');
         transcriptions.push({
@@ -97,22 +97,32 @@ class YoutubeTranscript {
   }
 }
 
-const parseTranscriptEndpoint = (document: any, langCode?: string) => {
+interface ScriptElement {
+  textContent: string;
+}
+
+interface CaptionTrack {
+  languageCode: string;
+  baseUrl: string;
+}
+
+interface YTPlayerResponse {
+  captions?: {
+    playerCaptionsTracklistRenderer?: {
+      captionTracks: CaptionTrack[];
+    };
+  };
+}
+
+const parseTranscriptEndpoint = (document: ReturnType<typeof parse>, langCode?: string) => {
   try {
-    // Get all script tags on document page
     const scripts = document.getElementsByTagName('script');
-
-    console.log(`[YoutubeTranscript] Number of Scripts Found: ${scripts.length}`);
-
-    // find the player data script.
-    const playerScript = scripts.find((script: any) =>
+    const playerScript = scripts.find((script: ScriptElement) =>
       script.textContent.includes('var ytInitialPlayerResponse = {')
     );
 
     if (!playerScript) {
-      console.error(`[YoutubeTranscript] playerScript not found`);
-    } else {
-      console.log(`[YoutubeTranscript] playerScript found.`);
+      throw new Error('Failed to find player script');
     }
 
     const dataString =
@@ -121,48 +131,19 @@ const parseTranscriptEndpoint = (document: any, langCode?: string) => {
         ?.split('};')?.[0] + // chunk off any code after object closure.
       '}'; // add back that curly brace we just cut.
 
-    if (!dataString) {
-      console.error(`[YoutubeTranscript] dataString is undefined or empty`);
-    } else {
-      console.log(`[YoutubeTranscript] dataString length: ${dataString.length}`);
-    }
-
-    const data = JSON.parse(dataString.trim()); // Attempt a JSON parse
-
-    if (!data) {
-      console.error(`[YoutubeTranscript] data is undefined or empty`);
-    } else {
-      console.log(`[YoutubeTranscript] data:`);
-      console.log(data);
-    }
-
-    const availableCaptions =
-      data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-
-    if (availableCaptions.length === 0) {
-      console.error(`[YoutubeTranscript] No available captions found`);
-    } else {
-      console.log(`[YoutubeTranscript] Available captions count: ${availableCaptions.length}`);
-    }
-
-    // If languageCode was specified then search for it's code, otherwise get the first.
+    const data = JSON.parse(dataString.trim()) as YTPlayerResponse;
+    
+    const availableCaptions = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     let captionTrack = availableCaptions?.[0];
     if (langCode)
-      captionTrack =
-        availableCaptions.find((track: any) =>
-          track.languageCode.includes(langCode)
-        ) ?? availableCaptions?.[0];
-
-    if (!captionTrack) {
-      console.error(`[YoutubeTranscript] No caption track found for lang: ${langCode}`);
-    } else {
-      console.log(`[YoutubeTranscript] Selected caption track: ${captionTrack.baseUrl}`);
-    }
+      captionTrack = availableCaptions.find((track: CaptionTrack) =>
+        track.languageCode.includes(langCode)
+      ) ?? availableCaptions?.[0];
 
     return captionTrack?.baseUrl;
-  } catch (e: any) {
-    console.error(e)
-    console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${e.message}`);
+  } catch (error: unknown) {
+    console.error(error);
+    console.error(`YoutubeTranscript.#parseTranscriptEndpoint ${error instanceof Error ? error.message : 'Unknown error'}`);
     return null;
   }
 };
